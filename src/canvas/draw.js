@@ -8,7 +8,12 @@ function thinLineWidth() {
 }
 
 function npx(px) {
-  return px * dpr();
+  return parseInt(px * dpr(), 10);
+}
+
+function npxLine(px) {
+  const n = npx(px);
+  return n > 0 ? n - 0.5 : 0.5;
 }
 
 class DrawBox {
@@ -26,11 +31,13 @@ class DrawBox {
     this.borderLeft = null;
   }
 
-  setBorders(bt, br, bb, bl) {
-    if (bt) this.borderTop = bt;
-    if (br) this.borderRight = br;
-    if (bb) this.borderBottom = bb;
-    if (bl) this.borderLeft = bl;
+  setBorders({
+    top, bottom, left, right,
+  }) {
+    if (top) this.borderTop = top;
+    if (right) this.borderRight = right;
+    if (bottom) this.borderBottom = bottom;
+    if (left) this.borderLeft = left;
   }
 
   innerWidth() {
@@ -60,12 +67,13 @@ class DrawBox {
     if (align === 'top') {
       y += padding;
     } else if (align === 'middle') {
-      const y1 = y + height / 2 - hoffset;
-      const y2 = y + padding + fontSize / 2 + 1;
-      if (y1 < y2) y = y2;
-      else y = y1;
+      y = y + height / 2 - hoffset;
+      // y = y1;
+      // const y2 = y + padding + fontSize / 2 + 1;
+      // if (y1 < y2) y = y2;
+      // else y = y1;
     } else if (align === 'bottom') {
-      y += height - padding;
+      y += height - hoffset * 2 - padding;
     }
     return y;
   }
@@ -97,13 +105,22 @@ class DrawBox {
   }
 }
 
-
-function drawStrikethrough(tx, ty, align, valign, blheight, blwidth) {
+function drawFontLine(type, tx, ty, align, valign, blheight, blwidth) {
   const floffset = { x: 0, y: 0 };
-  if (valign === 'bottom') {
-    floffset.y = blheight / 2;
-  } else if (valign === 'top') {
-    floffset.y = -blheight / 2;
+  if (type === 'underline') {
+    if (valign === 'bottom') {
+      floffset.y = 0;
+    } else if (valign === 'top') {
+      floffset.y = -(blheight + 2);
+    } else {
+      floffset.y = -blheight / 2;
+    }
+  } else if (type === 'strike') {
+    if (valign === 'bottom') {
+      floffset.y = blheight / 2;
+    } else if (valign === 'top') {
+      floffset.y = -((blheight / 2) + 2);
+    }
   }
 
   if (align === 'center') {
@@ -116,29 +133,6 @@ function drawStrikethrough(tx, ty, align, valign, blheight, blwidth) {
     [tx - floffset.x + blwidth, ty - floffset.y],
   );
 }
-
-
-function drawUnderline(tx, ty, align, valign, blheight, blwidth) {
-  const floffset = { x: 0, y: 0 };
-  if (valign === 'bottom') {
-    floffset.y = 0;
-  } else if (valign === 'top') {
-    floffset.y = -blheight;
-  } else {
-    floffset.y = -blheight / 2;
-  }
-
-  if (align === 'center') {
-    floffset.x = blwidth / 2;
-  } else if (align === 'right') {
-    floffset.x = blwidth;
-  }
-  this.line(
-    [tx - floffset.x, ty - floffset.y],
-    [tx - floffset.x + blwidth, ty - floffset.y],
-  );
-}
-
 
 class Draw {
   constructor(el, width, height) {
@@ -188,6 +182,11 @@ class Draw {
     return this;
   }
 
+  clearRect(x, y, w, h) {
+    this.ctx.clearRect(x, y, w, h);
+    return this;
+  }
+
   fillRect(x, y, w, h) {
     this.ctx.fillRect(npx(x) - 0.5, npx(y) - 0.5, npx(w), npx(h));
     return this;
@@ -205,8 +204,7 @@ class Draw {
       align: left | center | right
       valign: top | middle | bottom
       color: '#333333',
-      textDecoration: 'normal',
-      strikethrought: false,
+      strike: false,
       font: {
         name: 'Arial',
         size: 14,
@@ -219,10 +217,11 @@ class Draw {
   text(txt, box, attr = {}, textWrap = true) {
     const { ctx } = this;
     const {
-      align, valign, font, color, strikethrough, underline
+      align, valign, font, color, strike, underline,
     } = attr;
     const tx = box.textx(align);
     ctx.save();
+    ctx.beginPath();
     this.attr({
       textAlign: align,
       textBaseline: valign,
@@ -243,11 +242,11 @@ class Draw {
       for (let i = 0; i < txt.length; i += 1) {
         if (textLine.len >= box.innerWidth()) {
           this.fillText(txt.substring(textLine.start, i), tx, ty);
-          if (strikethrough) {
-            drawStrikethrough.call(this, tx, ty, align, valign, font.size, textLine.len);
+          if (strike) {
+            drawFontLine.call(this, 'strike', tx, ty, align, valign, font.size, textLine.len);
           }
           if (underline) {
-            drawUnderline.call(this, tx, ty, align, valign, font.size, textLine.len);
+            drawFontLine.call(this, 'underline', tx, ty, align, valign, font.size, textLine.len);
           }
           ty += font.size + 2;
           textLine.len = 0;
@@ -255,22 +254,22 @@ class Draw {
         }
         textLine.len += ctx.measureText(txt[i]).width;
       }
-      if (textWrap && textLine.len > 0) {
+      if (textLine.len > 0) {
         this.fillText(txt.substring(textLine.start), tx, ty);
-        if (strikethrough) {
-          drawStrikethrough.call(this, tx, ty, align, valign, font.size, textLine.len);
+        if (strike) {
+          drawFontLine.call(this, 'strike', tx, ty, align, valign, font.size, textLine.len);
         }
         if (underline) {
-          drawUnderline.call(this, tx, ty, align, valign, font.size, textLine.len);
+          drawFontLine.call(this, 'underline', tx, ty, align, valign, font.size, textLine.len);
         }
       }
     } else {
       this.fillText(txt, tx, ty);
-      if (strikethrough) {
-        drawStrikethrough.call(this, tx, ty, align, valign, font.size, txtWidth);
+      if (strike) {
+        drawFontLine.call(this, 'strike', tx, ty, align, valign, font.size, txtWidth);
       }
       if (underline) {
-        drawUnderline.call(this, tx, ty, align, valign, font.size, txtWidth);
+        drawFontLine.call(this, 'underline', tx, ty, align, valign, font.size, txtWidth);
       }
     }
     ctx.restore();
@@ -281,10 +280,11 @@ class Draw {
     const { ctx } = this;
     ctx.lineWidth = thinLineWidth;
     ctx.strokeStyle = color;
+    // console.log('style:', style);
     if (style === 'medium') {
-      ctx.lineWidth = npx(1) + 0.5;
+      ctx.lineWidth = npx(2) - 0.5;
     } else if (style === 'thick') {
-      ctx.lineWidth = npx(2) + 0.5;
+      ctx.lineWidth = npx(3);
     } else if (style === 'dashed') {
       ctx.setLineDash([npx(3), npx(2)]);
     } else if (style === 'dotted') {
@@ -299,10 +299,10 @@ class Draw {
     const { ctx } = this;
     if (xys.length > 1) {
       const [x, y] = xys[0];
-      ctx.moveTo(npx(x) - 0.5, npx(y) - 0.5);
+      ctx.moveTo(npxLine(x), npxLine(y));
       for (let i = 1; i < xys.length; i += 1) {
         const [x1, y1] = xys[i];
-        ctx.lineTo(npx(x1) - 0.5, npx(y1) - 0.5);
+        ctx.lineTo(npxLine(x1), npxLine(y1));
       }
       ctx.stroke();
     }
@@ -319,6 +319,7 @@ class Draw {
     } = box;
     if (borderTop) {
       this.border(...borderTop);
+      // console.log('box.topxys:', box.topxys());
       this.line(...box.topxys());
     }
     if (borderRight) {
@@ -336,7 +337,40 @@ class Draw {
     ctx.restore();
   }
 
-  rect(box) {
+  dropdown(box) {
+    const { ctx } = this;
+    const {
+      x, y, width, height,
+    } = box;
+    const sx = x + width - 15;
+    const sy = y + height - 15;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(npx(sx), npx(sy));
+    ctx.lineTo(npx(sx + 8), npx(sy));
+    ctx.lineTo(npx(sx + 4), npx(sy + 6));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 0, 0, .45)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  error(box) {
+    const { ctx } = this;
+    const { x, y, width } = box;
+    const sx = x + width - 1;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(npx(sx - 8), npx(y - 1));
+    ctx.lineTo(npx(sx), npx(y - 1));
+    ctx.lineTo(npx(sx), npx(y + 8));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255, 0, 0, .65)';
+    ctx.fill();
+    ctx.restore();
+  }
+
+  rect(box, dtextcb) {
     const { ctx } = this;
     const {
       x, y, width, height, bgcolor,
@@ -344,11 +378,10 @@ class Draw {
     ctx.save();
     ctx.beginPath();
     ctx.fillStyle = bgcolor || '#fff';
-    ctx.strokeStyle = '#e6e6e6';
-    ctx.rect(npx(x) - 0.5, npx(y) - 0.5, npx(width), npx(height));
+    ctx.rect(npxLine(x + 1), npxLine(y + 1), npx(width - 2), npx(height - 2));
+    ctx.clip();
     ctx.fill();
-    ctx.stroke();
-    this.strokeBorders(box);
+    dtextcb();
     ctx.restore();
   }
 }
