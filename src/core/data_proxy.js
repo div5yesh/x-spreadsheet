@@ -69,6 +69,7 @@ import { t } from '../locale/locale';
  * }
  */
 const defaultSettings = {
+  mode: 'edit', // edit | read
   view: {
     height: () => document.documentElement.clientHeight,
     width: () => document.documentElement.clientWidth,
@@ -76,6 +77,7 @@ const defaultSettings = {
   showGrid: true,
   showToolbar: true,
   showContextmenu: true,
+  showBottomBar: true,
   row: {
     len: 100,
     height: 25,
@@ -100,11 +102,12 @@ const defaultSettings = {
       bold: false,
       italic: false,
     },
+    format: 'normal',
   },
 };
 
 const toolbarHeight = 41;
-
+const bottombarHeight = 41;
 
 // src: cellRange
 // dst: cellRange
@@ -159,7 +162,7 @@ function setStyleBorder(ri, ci, bss) {
   if (cell.style !== undefined) {
     cstyle = helper.cloneDeep(styles[cell.style]);
   }
-  Object.assign(cstyle, { border: bss });
+  cstyle = helper.merge(cstyle, { border: bss });
   cell.style = this.addStyle(cstyle);
 }
 
@@ -168,7 +171,7 @@ function setStyleBorders({ mode, style, color }) {
   const {
     sri, sci, eri, eci,
   } = selector.range;
-  const multiple = !this.isSignleSelected();
+  const multiple = !this.isSingleSelected();
   if (!multiple) {
     if (mode === 'inside' || mode === 'horizontal' || mode === 'vertical') {
       return;
@@ -401,6 +404,41 @@ export default class DataProxy {
     this.clipboard.copy(this.selector.range);
   }
 
+  copyToSystemClipboard(evt) {
+    let copyText = [];
+    const {
+      sri, eri, sci, eci,
+    } = this.selector.range;
+
+    for (let ri = sri; ri <= eri; ri += 1) {
+      const row = [];
+      for (let ci = sci; ci <= eci; ci += 1) {
+        const cell = this.getCell(ri, ci);
+        row.push((cell && cell.text) || '');
+      }
+      copyText.push(row);
+    }
+
+    // Adding \n and why not adding \r\n is to support online office and client MS office and WPS
+    copyText = copyText.map(row => row.join('\t')).join('\n');
+
+    // why used this
+    // cuz http protocol will be blocked request clipboard by browser
+    if (evt) {
+      evt.clipboardData.clearData();
+      evt.clipboardData.setData('text/plain', copyText);
+      evt.preventDefault();
+    }
+
+    // this need https protocol
+    /* global navigator */
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(copyText).then(() => {}, (err) => {
+        console.log('text copy to the system clipboard error  ', copyText, err);
+      });
+    }
+  }
+
   cut() {
     this.clipboard.cut(this.selector.range);
   }
@@ -420,6 +458,54 @@ export default class DataProxy {
       }
     });
     return true;
+  }
+
+  pasteFromSystemClipboard(resetSheet, eventTrigger) {
+    const { selector } = this;
+    navigator.clipboard.readText().then((content) => {
+      const contentToPaste = this.parseClipboardContent(content);
+      let startRow = selector.ri;
+      contentToPaste.forEach((row) => {
+        let startColumn = selector.ci;
+        row.forEach((cellContent) => {
+          this.setCellText(startRow, startColumn, cellContent, 'input');
+          startColumn += 1;
+        });
+        startRow += 1;
+      });
+      resetSheet();
+      eventTrigger(this.rows.getData());
+    });
+  }
+
+  parseClipboardContent(clipboardContent) {
+    const parsedData = [];
+
+    // first we need to figure out how many rows we need to paste
+    const rows = clipboardContent.split('\n');
+
+    // for each row parse cell data
+    let i = 0;
+    rows.forEach((row) => {
+      parsedData[i] = row.split('\t');
+      i += 1;
+    });
+    return parsedData;
+  }
+
+  pasteFromText(txt) {
+    let lines = [];
+
+    if (/\r\n/.test(txt)) lines = txt.split('\r\n').map(it => it.replace(/"/g, '').split('\t'));
+    else lines = txt.split('\n').map(it => it.replace(/"/g, '').split('\t'));
+
+    if (lines.length) {
+      const { rows, selector } = this;
+
+      this.changeData(() => {
+        rows.paste(lines, selector.range);
+      });
+    }
   }
 
   autofill(cellRange, what, error = () => {}) {
@@ -531,6 +617,8 @@ export default class DataProxy {
             || property === 'color' || property === 'bgcolor') {
             cstyle[property] = value;
             cell.style = this.addStyle(cstyle);
+          } else {
+            cell[property] = value;
           }
         });
       }
@@ -661,7 +749,7 @@ export default class DataProxy {
     };
   }
 
-  isSignleSelected() {
+  isSingleSelected() {
     const {
       sri, sci, eri, eci,
     } = this.selector.range;
@@ -687,7 +775,7 @@ export default class DataProxy {
 
   merge() {
     const { selector, rows } = this;
-    if (this.isSignleSelected()) return;
+    if (this.isSingleSelected()) return;
     const [rn, cn] = selector.size();
     // console.log('merge:', rn, cn);
     if (rn > 1 || cn > 1) {
@@ -706,7 +794,7 @@ export default class DataProxy {
 
   unmerge() {
     const { selector } = this;
-    if (!this.isSignleSelected()) return;
+    if (!this.isSingleSelected()) return;
     const { sri, sci } = selector.range;
     this.changeData(() => {
       this.rows.deleteCell(sri, sci, 'merge');
@@ -783,7 +871,14 @@ export default class DataProxy {
       } else if (type === 'column') {
         rows.insertColumn(sci, n);
         si = sci;
-        cols.len += 1;
+        cols.len += n;
+        Object.keys(cols._).reverse().forEach((colIndex) => {
+          const col = parseInt(colIndex, 10);
+          if (col >= sci) {
+            cols._[col + n] = cols._[col];
+            delete cols._[col];
+          }
+        });
       }
       merges.shift(type, si, n, (ri, ci, rn, cn) => {
         const cell = rows.getCell(ri, ci);
@@ -812,7 +907,14 @@ export default class DataProxy {
         rows.deleteColumn(sci, eci);
         si = range.sci;
         size = csize;
-        cols.len -= 1;
+        cols.len -= (eci - sci + 1);
+        Object.keys(cols._).forEach((colIndex) => {
+          const col = parseInt(colIndex, 10);
+          if (col >= sci) {
+            if (col > eci) cols._[col - (eci - sci + 1)] = cols._[col];
+            delete cols._[col];
+          }
+        });
       }
       // console.log('type:', type, ', si:', si, ', size:', size);
       merges.shift(type, si, -size, (ri, ci, rn, cn) => {
@@ -964,8 +1066,11 @@ export default class DataProxy {
   }
 
   viewHeight() {
-    const { view, showToolbar } = this.settings;
+    const { view, showToolbar, showBottomBar } = this.settings;
     let h = view.height();
+    if (showBottomBar) {
+      h -= bottombarHeight;
+    }
     if (showToolbar) {
       h -= toolbarHeight;
     }
@@ -979,6 +1084,14 @@ export default class DataProxy {
   freezeViewRange() {
     const [ri, ci] = this.freeze;
     return new CellRange(0, 0, ri - 1, ci - 1, this.freezeTotalWidth(), this.freezeTotalHeight());
+  }
+
+  contentRange() {
+    const { rows, cols } = this;
+    const [ri, ci] = rows.maxCell();
+    const h = rows.sumHeight(0, ri + 1);
+    const w = cols.sumWidth(0, ci + 1);
+    return new CellRange(0, 0, ri, ci, w, h);
   }
 
   exceptRowTotalHeight(sri, eri) {
@@ -998,6 +1111,7 @@ export default class DataProxy {
     const {
       scroll, rows, cols, freeze, exceptRowSet,
     } = this;
+    // console.log('scroll:', scroll, ', freeze:', freeze)
     let { ri, ci } = scroll;
     if (ri <= 0) [ri] = freeze;
     if (ci <= 0) [, ci] = freeze;
@@ -1025,6 +1139,29 @@ export default class DataProxy {
       .forEach(it => cb(it));
   }
 
+  hideRowsOrCols() {
+    const { rows, cols, selector } = this;
+    const [rlen, clen] = selector.size();
+    const {
+      sri, sci, eri, eci,
+    } = selector.range;
+    if (rlen === rows.len) {
+      for (let ci = sci; ci <= eci; ci += 1) {
+        cols.setHide(ci, true);
+      }
+    } else if (clen === cols.len) {
+      for (let ri = sri; ri <= eri; ri += 1) {
+        rows.setHide(ri, true);
+      }
+    }
+  }
+
+  // type: row | col
+  // index row-index | col-index
+  unhideRowsOrCols(type, index) {
+    this[`${type}s`].unhide(index);
+  }
+
   rowEach(min, max, cb) {
     let y = 0;
     const { rows } = this;
@@ -1042,9 +1179,11 @@ export default class DataProxy {
         offset += 1;
       } else {
         const rowHeight = rows.getHeight(i);
-        cb(i, y, rowHeight);
-        y += rowHeight;
-        if (y > this.viewHeight()) break;
+        if (rowHeight > 0) {
+          cb(i, y, rowHeight);
+          y += rowHeight;
+          if (y > this.viewHeight()) break;
+        }
       }
     }
   }
@@ -1054,9 +1193,11 @@ export default class DataProxy {
     const { cols } = this;
     for (let i = min; i <= max; i += 1) {
       const colWidth = cols.getWidth(i);
-      cb(i, x, colWidth);
-      x += colWidth;
-      if (x > this.viewWidth()) break;
+      if (colWidth > 0) {
+        cb(i, x, colWidth);
+        x += colWidth;
+        if (x > this.viewWidth()) break;
+      }
     }
   }
 
@@ -1089,6 +1230,8 @@ export default class DataProxy {
       } else if (property === 'freeze') {
         const [x, y] = expr2xy(d[property]);
         this.freeze = [y, x];
+      } else if (property === 'autofilter') {
+        this.autoFilter.setData(d[property]);
       } else if (d[property] !== undefined) {
         this[property] = d[property];
       }
